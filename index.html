@@ -1,1 +1,384 @@
-Loading…
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chess w/ Friends</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- ============================================================
+     SETUP: replace these two values after creating your Supabase
+     project (Project Settings -> API). See README / setup guide.
+     ============================================================ -->
+<script>
+  window.SUPABASE_URL = "https://xmetvfgtetmivyidyovo.supabase.co/rest/v1/";
+  window.SUPABASE_ANON_KEY = "sb_publishable_bnqnmklx8Y0DdjlFAqgerA_mlRv5DZN";
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://unpkg.com/chess.js@0.13.4/chess.js"></script>
+
+<style>
+  :root{
+    --bg:#f6f6f4; --panel:#ffffff; --line:#8a8a86; --line-soft:#c7c7c2;
+    --text:#1c1c1a; --text-soft:#6b6b66; --accent:#2b2b28; --wash:#ececE8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#1b1b19; --panel:#242422; --line:#8f8f8a; --line-soft:#4a4a46;
+      --text:#eeeeea; --text-soft:#a3a39c; --accent:#eeeeea; --wash:#2d2d2a;
+    }
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:ui-monospace,'Courier New',monospace;min-height:100vh;}
+  .app{max-width:900px;margin:0 auto;padding:24px 18px 60px;}
+  h1{font-size:18px;margin:0 0 4px;}
+  .muted{color:var(--text-soft);font-size:12px;}
+  .frame{border:1.5px solid var(--line);background:var(--panel);border-radius:4px;padding:18px;margin-top:18px;}
+  input[type=text], input[type=email]{
+    font-family:inherit;font-size:13px;padding:9px 10px;border:1px solid var(--line-soft);
+    border-radius:3px;background:var(--wash);color:var(--text);width:100%;
+  }
+  .btn{display:inline-block;border:1.5px solid var(--accent);color:var(--accent);background:transparent;
+    padding:9px 16px;font-size:12.5px;border-radius:3px;cursor:pointer;font-family:inherit;}
+  .btn.solid{background:var(--accent);color:var(--bg);}
+  .btn.small{padding:5px 10px;font-size:11px;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+  .game-row{display:flex;align-items:center;gap:12px;border:1px solid var(--line-soft);border-radius:3px;
+    padding:10px 12px;margin-bottom:8px;background:var(--panel);}
+  .game-meta{flex:1;}
+  .game-meta .name{font-size:12.5px;font-weight:700;}
+  .game-meta .status{font-size:10.5px;color:var(--text-soft);margin-top:2px;}
+  .pill{font-size:9.5px;border:1px solid var(--line-soft);padding:2px 8px;border-radius:10px;color:var(--text-soft);white-space:nowrap;}
+  .pill.turn{border-color:var(--accent);color:var(--accent);font-weight:700;}
+  .board{width:min(420px,90vw);aspect-ratio:1/1;display:grid;grid-template-columns:repeat(8,1fr);
+    grid-template-rows:repeat(8,1fr);border:2px solid var(--line);flex:none;}
+  .sq{display:flex;align-items:center;justify-content:center;font-size:26px;cursor:pointer;position:relative;user-select:none;}
+  .sq.light{background:var(--wash);} .sq.dark{background:var(--line-soft);}
+  .sq.selected{outline:2px solid var(--accent);outline-offset:-2px;}
+  .sq.legal::after{content:"";position:absolute;width:10px;height:10px;border-radius:50%;background:var(--accent);opacity:.55;}
+  .board-wrap{display:flex;gap:20px;flex-wrap:wrap;}
+  .side{flex:1;min-width:220px;display:flex;flex-direction:column;gap:12px;}
+  .move-list{border:1px solid var(--line-soft);border-radius:3px;padding:8px;font-size:11.5px;height:160px;overflow-y:auto;background:var(--wash);}
+  .status-banner{border:1.5px dashed var(--line);border-radius:3px;padding:10px 12px;font-size:12px;
+    display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+  a{color:var(--accent);}
+  #toast{position:fixed;bottom:20px;right:20px;background:var(--accent);color:var(--bg);padding:10px 14px;
+    border-radius:4px;font-size:11.5px;max-width:260px;display:none;}
+  #toast.show{display:block;}
+  .invite-box{background:var(--wash);border:1px solid var(--line-soft);border-radius:3px;padding:10px;font-size:12px;word-break:break-all;}
+</style>
+</head>
+<body>
+<div class="app" id="app">Loading…</div>
+<div id="toast"></div>
+
+<script>
+/* ---------- setup ---------- */
+const supa = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+const app = document.getElementById("app");
+let currentUser = null;
+let currentProfile = null;
+
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=>t.classList.remove("show"), 3000);
+}
+
+/* ---------- router ---------- */
+window.addEventListener("hashchange", render);
+window.addEventListener("DOMContentLoaded", init);
+
+async function init(){
+  const { data: { session } } = await supa.auth.getSession();
+  currentUser = session?.user || null;
+  if (currentUser) await ensureProfile();
+  supa.auth.onAuthStateChange(async (_event, session) => {
+    currentUser = session?.user || null;
+    if (currentUser) await ensureProfile();
+    render();
+  });
+  render();
+}
+
+async function ensureProfile(){
+  const { data } = await supa.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
+  if (data) { currentProfile = data; return; }
+  const defaultName = currentUser.email.split("@")[0];
+  const { data: created } = await supa.from("profiles")
+    .insert({ id: currentUser.id, display_name: defaultName })
+    .select().single();
+  currentProfile = created;
+}
+
+function render(){
+  const hash = location.hash || "#/";
+  if (!currentUser) return renderLogin();
+  if (hash.startsWith("#/join/")) return renderJoin(hash.split("#/join/")[1]);
+  if (hash.startsWith("#/game/")) return renderGame(hash.split("#/game/")[1]);
+  return renderDashboard();
+}
+
+/* ---------- login ---------- */
+function renderLogin(){
+  app.innerHTML = `
+    <h1>♟ Chess w/ Friends</h1>
+    <p class="muted">Sign in with just your email — no password. We'll send a one-time link.</p>
+    <div class="frame">
+      <div class="row">
+        <input type="email" id="emailInput" placeholder="you@example.com" style="max-width:280px;">
+        <button class="btn solid" id="sendLink">Send sign-in link</button>
+      </div>
+      <p class="muted" id="loginMsg" style="margin-top:10px;"></p>
+    </div>`;
+  document.getElementById("sendLink").onclick = async () => {
+    const email = document.getElementById("emailInput").value.trim();
+    if (!email) return;
+    const { error } = await supa.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin + window.location.pathname + location.hash }
+    });
+    document.getElementById("loginMsg").textContent = error
+      ? "Something went wrong: " + error.message
+      : "Check your email for a sign-in link.";
+  };
+}
+
+/* ---------- dashboard ---------- */
+async function renderDashboard(){
+  app.innerHTML = `
+    <div class="row" style="justify-content:space-between;">
+      <div><h1>♟ Chess w/ Friends</h1><p class="muted">Signed in as ${currentProfile?.display_name || currentUser.email}</p></div>
+      <div class="row">
+        <button class="btn small" id="newGameBtn">+ New game</button>
+        <button class="btn small" id="signOutBtn">Sign out</button>
+      </div>
+    </div>
+    <div class="frame" id="gamesList">Loading games…</div>`;
+
+  document.getElementById("newGameBtn").onclick = createGame;
+  document.getElementById("signOutBtn").onclick = async () => { await supa.auth.signOut(); render(); };
+
+  const { data: games, error } = await supa.from("games")
+    .select("*")
+    .or(`white_id.eq.${currentUser.id},black_id.eq.${currentUser.id}`)
+    .order("updated_at", { ascending: false });
+
+  const list = document.getElementById("gamesList");
+  if (error) { list.textContent = "Couldn't load games."; return; }
+  if (!games.length) { list.innerHTML = `<p class="muted">No games yet. Click "New game" to start one and share the link with a friend.</p>`; return; }
+
+  list.innerHTML = games.map(g => {
+    const isWhite = g.white_id === currentUser.id;
+    const myTurn = g.status === "active" && ((isWhite && g.turn === "w") || (!isWhite && g.turn === "b"));
+    const waitingForOpponent = g.status === "waiting";
+    const statusText = waitingForOpponent ? "Waiting for opponent to join"
+      : g.status === "finished" ? `Finished — ${g.winner === "draw" ? "draw" : (g.winner === "w") === isWhite ? "you won" : "opponent won"}`
+      : myTurn ? "Your move" : "Opponent's move";
+    return `
+      <div class="game-row">
+        <div class="game-meta">
+          <div class="name">Game ${g.id.slice(0,8)} — you play ${isWhite ? "White" : "Black"}</div>
+          <div class="status">${statusText}</div>
+        </div>
+        ${myTurn ? `<span class="pill turn">Your move</span>` : ""}
+        <button class="btn small" onclick="location.hash='#/game/${g.id}'">Open</button>
+      </div>`;
+  }).join("");
+}
+
+async function createGame(){
+  const { data, error } = await supa.from("games")
+    .insert({ white_id: currentUser.id })
+    .select().single();
+  if (error) { toast("Couldn't create game: " + error.message); return; }
+  location.hash = "#/game/" + data.id;
+}
+
+/* ---------- join via invite link ---------- */
+async function renderJoin(code){
+  app.innerHTML = `<h1>♟ Joining game…</h1><p class="muted">Code: ${code}</p>`;
+  const { data: game, error } = await supa.from("games").select("*").eq("invite_code", code).maybeSingle();
+  if (error || !game) { app.innerHTML += `<p>Invite link not found.</p>`; return; }
+  if (game.white_id === currentUser.id) { location.hash = "#/game/" + game.id; return; }
+  if (game.black_id && game.black_id !== currentUser.id) {
+    app.innerHTML += `<p>This game already has two players.</p>`; return;
+  }
+  if (!game.black_id) {
+    const { error: joinErr } = await supa.from("games")
+      .update({ black_id: currentUser.id, status: "active" })
+      .eq("id", game.id).eq("status", "waiting");
+    if (joinErr) { app.innerHTML += `<p>Couldn't join: ${joinErr.message}</p>`; return; }
+  }
+  location.hash = "#/game/" + game.id;
+}
+
+/* ---------- game view ---------- */
+let chess = null;
+let selectedSquare = null;
+let realtimeChannel = null;
+
+async function renderGame(gameId){
+  if (realtimeChannel) { supa.removeChannel(realtimeChannel); realtimeChannel = null; }
+
+  const { data: game, error } = await supa.from("games").select("*").eq("id", gameId).single();
+  if (error || !game) { app.innerHTML = `<p>Game not found.</p>`; return; }
+
+  const isWhite = game.white_id === currentUser.id;
+  const isBlack = game.black_id === currentUser.id;
+  const isPlayer = isWhite || isBlack;
+  const inviteUrl = `${window.location.origin}${window.location.pathname}#/join/${game.invite_code}`;
+
+  chess = new Chess(game.fen);
+  selectedSquare = null;
+
+  const { data: moves } = await supa.from("moves").select("*").eq("game_id", gameId).order("move_number");
+
+  app.innerHTML = `
+    <div class="row" style="justify-content:space-between;">
+      <button class="btn small" onclick="location.hash='#/'">← Dashboard</button>
+    </div>
+    ${game.status === "waiting" ? `
+      <div class="frame">
+        <p><b>Waiting for an opponent.</b> Share this link with a friend:</p>
+        <div class="invite-box" id="inviteLink">${inviteUrl}</div>
+        <button class="btn small" style="margin-top:8px;" id="copyLink">Copy link</button>
+      </div>` : ""}
+    <div class="status-banner">
+      <span>${isPlayer ? `You are ${isWhite ? "White" : "Black"}` : "Spectating"}</span>
+      <span class="pill ${isPlayer && game.status==='active' && game.turn === (isWhite?'w':'b') ? 'turn':''}">
+        ${game.status === "finished" ? "Game finished" : game.turn === "w" ? "White to move" : "Black to move"}
+      </span>
+    </div>
+    <div class="board-wrap">
+      <div class="board" id="board"></div>
+      <div class="side">
+        <div>
+          <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">MOVE HISTORY</div>
+          <div class="move-list" id="moveList"></div>
+        </div>
+        ${isPlayer && game.status === "active" ? `<button class="btn small" id="resignBtn">Resign</button>` : ""}
+      </div>
+    </div>`;
+
+  if (game.status === "waiting") {
+    document.getElementById("copyLink").onclick = () => {
+      navigator.clipboard.writeText(inviteUrl); toast("Link copied.");
+    };
+  }
+  if (isPlayer && game.status === "active") {
+    const resignBtn = document.getElementById("resignBtn");
+    if (resignBtn) resignBtn.onclick = () => resign(game, isWhite);
+  }
+
+  drawBoard(game, isWhite || !isBlack);
+  drawMoves(moves || []);
+
+  // live updates: subscribe to this game's row and its moves
+  realtimeChannel = supa.channel("game-" + gameId)
+    .on("postgres_changes", { event: "*", schema: "public", table: "games", filter: `id=eq.${gameId}` },
+      payload => { if (location.hash === "#/game/" + gameId) renderGame(gameId); })
+    .subscribe();
+
+  function drawBoard(gameRow, orientWhite){
+    const boardEl = document.getElementById("board");
+    boardEl.innerHTML = "";
+    const glyphs = { p:'♟',n:'♞',b:'♝',r:'♜',q:'♛',k:'♚', P:'♙',N:'♘',B:'♗',R:'♖',Q:'♕',K:'♔' };
+    const files = ['a','b','c','d','e','f','g','h'];
+    const ranksOrder = orientWhite ? [8,7,6,5,4,3,2,1] : [1,2,3,4,5,6,7,8];
+    const filesOrder = orientWhite ? files : [...files].reverse();
+
+    let legalTargets = [];
+    if (selectedSquare) {
+      legalTargets = chess.moves({ square: selectedSquare, verbose: true }).map(m => m.to);
+    }
+
+    ranksOrder.forEach(rank => {
+      filesOrder.forEach(file => {
+        const squareName = file + rank;
+        const piece = chess.get(squareName);
+        const isLight = (files.indexOf(file) + rank) % 2 === 1;
+        const sq = document.createElement("div");
+        sq.className = "sq " + (isLight ? "light" : "dark");
+        if (squareName === selectedSquare) sq.classList.add("selected");
+        if (legalTargets.includes(squareName)) sq.classList.add("legal");
+        if (piece) sq.textContent = glyphs[piece.color === "w" ? piece.type.toUpperCase() : piece.type];
+        sq.onclick = () => handleSquareClick(squareName, gameRow, isWhite, isBlack);
+        boardEl.appendChild(sq);
+      });
+    });
+  }
+
+  function drawMoves(moveRows){
+    const el = document.getElementById("moveList");
+    if (!moveRows.length) { el.innerHTML = `<span class="muted">No moves yet.</span>`; return; }
+    let html = "";
+    for (let i = 0; i < moveRows.length; i += 2) {
+      const num = Math.floor(i/2) + 1;
+      const w = moveRows[i]?.san || "";
+      const b = moveRows[i+1]?.san || "";
+      html += `<div>${num}. ${w} ${b}</div>`;
+    }
+    el.innerHTML = html;
+    el.scrollTop = el.scrollHeight;
+  }
+
+  async function handleSquareClick(squareName, gameRow, isWhiteP, isBlackP){
+    if (gameRow.status !== "active") return;
+    const myColor = isWhiteP ? "w" : isBlackP ? "b" : null;
+    if (!myColor || gameRow.turn !== myColor) return;
+
+    if (!selectedSquare) {
+      const piece = chess.get(squareName);
+      if (piece && piece.color === myColor) {
+        selectedSquare = squareName;
+        drawBoard(gameRow, isWhiteP || !isBlackP);
+      }
+      return;
+    }
+
+    if (squareName === selectedSquare) { selectedSquare = null; drawBoard(gameRow, isWhiteP || !isBlackP); return; }
+
+    const move = chess.move({ from: selectedSquare, to: squareName, promotion: "q" });
+    selectedSquare = null;
+    if (!move) { drawBoard(gameRow, isWhiteP || !isBlackP); return; }
+
+    const newFen = chess.fen();
+    const newTurn = chess.turn();
+    const isOver = chess.game_over();
+    let status = gameRow.status, winner = null;
+    if (isOver) {
+      status = "finished";
+      if (chess.in_checkmate()) winner = myColor;
+      else winner = "draw";
+    }
+
+    const { data: moveCountRows } = await supa.from("moves").select("id", { count: "exact", head: true }).eq("game_id", gameRow.id);
+    const nextMoveNumber = (moveCountRows?.length ?? 0);
+
+    await supa.from("moves").insert({
+      game_id: gameRow.id,
+      move_number: nextMoveNumber,
+      san: move.san,
+      fen_after: newFen,
+      played_by: currentUser.id
+    });
+
+    await supa.from("games").update({
+      fen: newFen, turn: newTurn, status, winner, updated_at: new Date().toISOString()
+    }).eq("id", gameRow.id);
+
+    renderGame(gameRow.id);
+  }
+}
+
+async function resign(gameRow, isWhite){
+  const winner = isWhite ? "b" : "w";
+  await supa.from("games").update({ status: "finished", winner, updated_at: new Date().toISOString() }).eq("id", gameRow.id);
+  toast("You resigned.");
+  location.hash = "#/";
+}
+</script>
+</body>
+</html>
