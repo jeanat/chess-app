@@ -15,7 +15,7 @@
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="https://unpkg.com/chess.js@0.13.4/chess.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.13.4/chess.min.js"></script>
 
 <style>
   :root{
@@ -107,7 +107,7 @@ async function ensureProfile(){
   if (data) { currentProfile = data; return; }
   const defaultName = currentUser.email.split("@")[0];
   const { data: created } = await supa.from("profiles")
-    .insert({ id: currentUser.id, display_name: defaultName })
+    .upsert({ id: currentUser.id, display_name: defaultName })
     .select().single();
   currentProfile = created;
 }
