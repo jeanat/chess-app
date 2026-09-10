@@ -94,12 +94,22 @@ async function init(){
   const { data: { session } } = await supa.auth.getSession();
   currentUser = session?.user || null;
   if (currentUser) await ensureProfile();
+  redirectToPendingJoinIfAny();
   supa.auth.onAuthStateChange(async (_event, session) => {
     currentUser = session?.user || null;
     if (currentUser) await ensureProfile();
+    redirectToPendingJoinIfAny();
     render();
   });
   render();
+}
+
+function redirectToPendingJoinIfAny(){
+  const pending = localStorage.getItem("pendingJoinCode");
+  if (currentUser && pending) {
+    localStorage.removeItem("pendingJoinCode");
+    location.hash = "#/join/" + pending;
+  }
 }
 
 async function ensureProfile(){
